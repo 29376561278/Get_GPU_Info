@@ -1,4 +1,4 @@
-﻿#include <Windows.h>
+#include <Windows.h>
 #include <iomanip>
 #include <stdio.h>
 
@@ -62,8 +62,8 @@ int main(int argc, char *argv[])
         LOGI << TAG << "GPU 专用资源限制:                " << dataList[GPU_DEDICATED_LIMIT].ulong64_ / 1024 / 1024 << "MB \n";
         
         LOGI << TAG << "GPU 系统专用资源使用率:         " << dataList[GPU_SYSTEM_DEDICATED_USAGE].ulong64_ / 1024 / 1024 << "MB \n";
-                LOGI << TAG << "GPU 系统共享资源使用率:            " << dataList[GPU_SYSTEM_SHARED_USAGE].ulong64_ / 1024 / 1024 << "MB \n";
-
+        LOGI << TAG << "GPU 系统共享资源使用率:            " << dataList[GPU_SYSTEM_SHARED_USAGE].ulong64_ / 1024 / 1024 << "MB \n";
+        LOGI << TAG << "GPU 系统共享内存: " << dataList[GPU_SHARED_LIMIT].ulong64_ / 1024 / 1024 << "MB \n";
         LOGI << "===============================================================\n";
     //}
     
