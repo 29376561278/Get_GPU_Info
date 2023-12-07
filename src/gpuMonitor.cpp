@@ -5,12 +5,15 @@
 /*
 	Attention: <Windows.h> must be front of <cfgmgr32.h> and <ntddvdeo.h>
 */
+#include <comdef.h>
+#include <Wbemidl.h>
 #include <cfgmgr32.h>
 #include <ntddvdeo.h>
 #include <d3d11.h>
 #include <winternl.h>
 #include <winnt.h>
 #include "../config/gpuMonitor.h"
+#pragma comment(lib, "wbemuuid.lib")
 static const char* TAG = "gpuMonitor.cpp:\t";
 
 
@@ -72,11 +75,122 @@ bool GpuMonitor::start()
 
 	return true;
 }
+int WMIGetinfo() {
+	
+	HRESULT hres;
+	int Gpu_dedicated_memory;
+	// 初始化 COM 库
+	hres = CoInitializeEx(0, COINIT_MULTITHREADED);
+	if (FAILED(hres))
+	{
+		std::cerr << "Failed to initialize COM library. Error code: " << hres << std::endl;
+		return -1;
+	}
 
+	// 设置 COM 安全性
+	hres = CoInitializeSecurity(
+		NULL,
+		-1,
+		NULL,
+		NULL,
+		RPC_C_AUTHN_LEVEL_DEFAULT,
+		RPC_C_IMP_LEVEL_IMPERSONATE,
+		NULL,
+		EOAC_NONE,
+		NULL
+	);
+	if (FAILED(hres))
+	{
+		std::cerr << "Failed to initialize security. Error code: " << hres << std::endl;
+		CoUninitialize();
+		return -1;
+	}
+
+	// 获取 WMI 服务
+	IWbemLocator* pLoc = NULL;
+	hres = CoCreateInstance(
+		CLSID_WbemLocator,
+		0,
+		CLSCTX_INPROC_SERVER,
+		IID_IWbemLocator,
+		(LPVOID*)&pLoc
+	);
+	if (FAILED(hres))
+	{
+		std::cerr << "Failed to create IWbemLocator object. Error code: " << hres << std::endl;
+		CoUninitialize();
+		return -1;
+	}
+
+	IWbemServices* pSvc = NULL;
+	hres = pLoc->ConnectServer(
+		_bstr_t(L"ROOT\\CIMV2"),  // WMI 命名空间
+		NULL,                     // 用户名（使用当前用户）
+		NULL,                     // 密码（使用当前用户）
+		0,                        // 安全标志
+		NULL,                     // 权限级别
+		0,                        // 上下文
+		NULL,                     // 代理
+		&pSvc                     // IWbemServices 指针
+	);
+	if (FAILED(hres))
+	{
+		std::cerr << "Failed to connect to WMI namespace. Error code: " << hres << std::endl;
+		pLoc->Release();
+		CoUninitialize();
+		return -1;
+	}
+
+	// 设置 WMI 查询语言
+	IEnumWbemClassObject* pEnumerator = NULL;
+	hres = pSvc->ExecQuery(
+		bstr_t("WQL"),
+		bstr_t("SELECT * FROM Win32_VideoController"),
+		WBEM_FLAG_FORWARD_ONLY | WBEM_FLAG_RETURN_IMMEDIATELY,
+		NULL,
+		&pEnumerator
+	);
+	if (FAILED(hres))
+	{
+		std::cerr << "Failed to execute WMI query. Error code: " << hres << std::endl;
+		pSvc->Release();
+		pLoc->Release();
+		CoUninitialize();
+		return -1;
+	}
+
+	// 枚举查询结果
+	IWbemClassObject* pclsObj = NULL;
+	ULONG uReturn = 0;
+	while (pEnumerator)
+	{
+		hres = pEnumerator->Next(WBEM_INFINITE, 1, &pclsObj, &uReturn);
+		if (uReturn == 0)
+			break;
+
+		VARIANT vtProp;
+		hres = pclsObj->Get(L"AdapterRAM", 0, &vtProp, 0, 0);
+		if (SUCCEEDED(hres))
+		{
+			Gpu_dedicated_memory = int(vtProp.bstrVal) / 1024 / 1024;
+			VariantClear(&vtProp);
+		}
+
+		pclsObj->Release();
+	}
+
+	// 释放资源
+	pSvc->Release();
+	pLoc->Release();
+	pEnumerator->Release();
+	CoUninitialize();
+
+	return Gpu_dedicated_memory;
+}
 std::vector<FLOAT_ULONG64> GpuMonitor::collect()
 {
 	static ULONG runCount = 0; // MUST keep in sync with runCount in process provider
-	DOUBLE elapsedTime = 0; // total GPU node elapsed time in micro-secondʱ��
+	DOUBLE elapsedTime = 0; // total GPU node elapsed time in micro-second时间
 	FLOAT tempGpuUsage = 0;
 	ULONG i;
 	//PET_PROCESS_BLOCK maxNodeBlock = NULL;
@@ -107,7 +221,8 @@ std::vector<FLOAT_ULONG64> GpuMonitor::collect()
 				tempGpuUsage = usage;
 		}
 	}
-
+	
+	int Gpu_dedicated_memory = WMIGetinfo();
 	EtGpuNodeUsage_ = tempGpuUsage;
 
 	//EtpUpdateProcessSegmentInformation();
@@ -124,7 +239,7 @@ std::vector<FLOAT_ULONG64> GpuMonitor::collect()
 
 	//	TODO: fixme
 	dataList_[GPU_TARGET_PROCESS_DEDICATED_USAGE].ulong64_ = targetProcessGpuDedicatedUsage_;
-	dataList_[GPU_DEDICATED_LIMIT].ulong64_ = EtGpuDedicatedLimit_;
+	dataList_[GPU_DEDICATED_LIMIT].ulong64_ = Gpu_dedicated_memory;
 	dataList_[GPU_TARGET_PROCESS_SHARED_USAGE].ulong64_ = targetProcessGpuSharedUsage_;
 	dataList_[GPU_SHARED_LIMIT].ulong64_ = EtGpuSharedLimit_;
 	dataList_[GPU_SYSTEM_DEDICATED_USAGE].ulong64_ = EtGpuDedicatedUsage_;
@@ -620,7 +735,7 @@ SIZE_T PhCountStringZ(
 
 
 
-// getWindowsVersion.cpp ����ȷ�ϰ汾
+// getWindowsVersion.cpp 用于确认版本
 extern RtlGetVersion fnRtlGetVersion;
 
 ULONG getWindowsVersion() {
@@ -670,6 +785,10 @@ ULONG getWindowsVersion() {
 		if (buildVersion >= 22500)
 		{
 			WindowsVersion = WINDOWS_11_22H1;
+		}
+		else if (buildVersion >= 22631)
+		{
+			WindowsVersion = WINDOWS_11_23H2;
 		}
 		else if (buildVersion >= 22000)
 		{
